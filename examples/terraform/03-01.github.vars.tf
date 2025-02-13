@@ -56,11 +56,12 @@ resource "github_actions_variable" "action_vault_path_kv_02" {
   value            = vault_kv_secret_v2.azurevaultkv02.path # "azurekvv2/data/azurevaultkv02"
 }
 
-resource "github_actions_secret" "action_vault_token" {
-  repository        = data.github_repository.github_actions.name
-  secret_name       = "VAULT_TOKEN"
-  plaintext_value   = vault_token.demo-example-token.client_token
-}
+# [DEBUG] Check Policy with generated Token
+# resource "github_actions_secret" "action_vault_token" {
+#   repository        = data.github_repository.github_actions.name
+#   secret_name       = "VAULT_TOKEN"
+#   plaintext_value   = vault_token.demo-example-token.client_token
+# }
 
 resource "github_actions_secret" "action_azure_subscription" {
   repository        = data.github_repository.github_actions.name
