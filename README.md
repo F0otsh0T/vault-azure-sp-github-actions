@@ -1,6 +1,6 @@
 ---
-title: 
-description: 
+title: Vault Azure Secrets GitHub Actions
+description: Examples for integrating HashiCorp Vault Azure Secrets Engine with AzureAD/Entra Application/Service Principal and GitHub Actions
 ---
 
 # HashiCorp Vault Azure Secrets Engine and GitHub Actions
