@@ -1,0 +1,210 @@
+name: GitHub Actions Test - Vault
+on:
+  push:
+    branches: [
+      main,
+      development
+    ]
+  # pull_request:
+  #   branches: [
+  #     main,
+  #     development
+  #   ]
+jobs:
+############################################################################################################
+# JOB:
+#   - Use GitHub Actions JWT Token to Login to Vault JWT Auth
+#   - Test Read KVv2 Secrets
+#   - Read Azure Secrets to retrieve Azure Service Principal `client_id` and `client_secret`
+#
+  retrieve-secret:
+    name: "Azure Service Principal - Read Secrets"
+    runs-on: ubuntu-latest
+    # outputs:
+    #     TKN: ${{ steps.log_in_to_vault.outputs.VAULT_TOKEN }}
+    #     TKN_ACCSSR: ${{ steps.log_in_to_vault.outputs.VAULT_TOKEN_ACCESSOR }}
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+#### [STEP] Check Out Repository
+      - name: Check Out Repository
+        uses: actions/checkout@v4
+#### [STEP][DEBUG] Show Repository
+      - name: Show Repository
+        run: |
+            ls -al
+
+#### [STEP][DEBUG] Show GitHub ID_TOKEN REQUEST_TOKEN and REQUEST_URL
+     # COMMENT OUT WHEN 
+      # - name: Show GitHub ID_TOKEN REQUEST_TOKEN and REQUEST_URL
+      #   run: |
+      #       echo -e "ACTIONS_ID_TOKEN_REQUEST_TOKEN:" $ACTIONS_ID_TOKEN_REQUEST_TOKEN
+      #       echo -e "ACTIONS_ID_TOKEN_REQUEST_URL:" $ACTIONS_ID_TOKEN_REQUEST_URL
+#### [STEP] Get GitHub JWT Token Claims
+      - name: Show GitHub JWT Token Claims
+        id: get_github_jwt_token_claims
+        # Credit to Benjamin Pannell for this technique
+        ### https://sierrasoftworks.com/2021/12/20/vault-github-actions/#debugging-issues
+        ### https://github.com/ned1313/vault-oidc-github-actions/blob/main/.github/workflows/oidc_test.yml
+        ##### [NOTE] ^^ `token.json` used as data for later login step as per link above from Sierra Softworks
+        #####  `--data @token.json` is used in the `curl` command in steps.log_in_to_vault below
+        env:
+          VAULT_ADDR: ${{ vars.VAULT_URL }}
+          VAULT_AUTH_JWT_GITHUB_PATH: ${{ vars.VAULT_AUTH_PATH }}
+          VAULT_AUTH_JWT_GITHUB_ROLE: ${{ vars.VAULT_ROLE }}
+          VAULT_NAMESPACE: ${{ vars.VAULT_NAMESPACE }}
+        run: |
+            # [DEBUG]
+            # echo -e "VAULT_ADDR:" $VAULT_ADDR
+            # echo -e "VAULT_AUTH_JWT_GITHUB_ROLE:" $VAULT_AUTH_JWT_GITHUB_ROLE
+            # echo -e "VAULT_NAMESPACE:" $VAULT_NAMESPACE
+            # echo -e "VAULT_AUTH_JWT_GITHUB_PATH:" $VAULT_AUTH_JWT_GITHUB_PATH
+
+            # Harvest GitHub Actions JWT Token
+            curl -sSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "$ACTIONS_ID_TOKEN_REQUEST_URL" | \
+              jq "{ jwt: .value, role: \"$VAULT_AUTH_JWT_GITHUB_ROLE\" }" > ./token.json
+            
+            echo 'GitHub Actions Token Claims:'
+            cat ./token.json | jq -r '.jwt | split(".") | .[1] | @base64d' | jq
+#### [STEP] Show Vault KVv2 Secrets (Test)
+      - name: Retrieve KVv2 Secret from Vault
+        uses: hashicorp/vault-action@v3.1.0
+        with:
+          method: jwt
+          path: ${{ vars.VAULT_AUTH_PATH }}
+          url: ${{ vars.VAULT_URL }}
+          namespace: ${{ vars.VAULT_NAMESPACE }}
+          role: ${{ vars.VAULT_ROLE }}
+          secrets: |
+            ${{ vars.SECRET_PATH_KV_01 }} foo | AZUREVAULTKV01_FOO ;
+            ${{ vars.SECRET_PATH_KV_01 }} zip | AZUREVAULTKV01_ZIP ;
+            ${{ vars.SECRET_PATH_KV_02 }} foo | AZUREVAULTKV02_FOO ;
+            ${{ vars.SECRET_PATH_KV_02 }} zip | AZUREVAULTKV02_ZIP
+      - name: Show KVv2 Secrets
+        run: |
+          echo "Secrets retrieved from Vault"
+          echo "Azure KVv2 Secret 01 at key foo: $AZUREVAULTKV01_FOO"
+          echo "Azure KVv2 Secret 01 at key zip: $AZUREVAULTKV01_ZIP"
+          echo "Azure KVv2 Secret 02 at key foo: $AZUREVAULTKV02_FOO"
+          echo "Azure KVv2 Secret 02 at key zip: $AZUREVAULTKV02_ZIP"
+
+#### [STEP] Log in to Vault
+      - name: Log in to Vault
+        id: log_in_to_vault
+        run: |
+            # Login to Vault - Uses data body from previous GitHub Actions JWT retrieval in steps.get_github_jwt_token_claims
+
+            curl -sSLf -X POST -H "Content-Type: application/json" -H "X-Vault-Namespace: $VAULT_NAMESPACE" --data @token.json $VAULT_ADDR/v1/auth/$VAULT_AUTH_JWT_GITHUB_PATH/login | jq > login.json
+            ## [DEBUG] Show Login JSON
+            # echo 'Vault Login Response:'
+            # cat ./login.json | jq
+
+            ## Output Token JSON
+            ## [DEBUG] Show Token JSON
+            # echo 'Vault Token JSON:'
+            # cat ./token.json | jq
+
+            # Process Login Token and Accessor:
+            cat ./login.json | jq -r '.auth | { token: .client_token, accessor: .accessor }' > ./login-token.json
+
+            ## Output Login Token JSON
+            ## [DEBUG] Show Login Token JSON
+            echo 'Vault Login Token JSON:'
+            # cat ./login-token.json | jq
+
+            ## VAULT_TOKEN - Save Token to GitHub Actions Output for future use
+            TOKEN=$(cat ./login-token.json | jq -r '.token')
+            # ## [DEBUG] Show Token
+            # echo -e "TOKEN:" $TOKEN
+            # echo "::add-mask::$TOKEN"
+            ## Output Login Token to GitHub Actions Output File `$GITHUB_OUTPUT`
+            echo "VAULT_TOKEN=$TOKEN" >> $GITHUB_OUTPUT
+            echo "VAULT_TOKEN=$TOKEN" >> $GITHUB_ENV
+
+            ## VAULT_TOKEN_ACCESSOR - Save Token Accessor to GitHub Actions Output for future use
+            TOKEN_ACCESSOR=$(cat ./login-token.json | jq -r '.accessor')
+            ## [DEBUG] Show Token Accessor
+            # echo -e "TOKEN_ACCESSOR:" $TOKEN_ACCESSOR
+            # echo "::add-mask::$TOKEN_ACCESSOR"
+            echo "VAULT_TOKEN_ACCESSOR=$TOKEN_ACCESSOR" >> $GITHUB_OUTPUT
+            echo "VAULT_TOKEN_ACCESSOR=$TOKEN_ACCESSOR" >> $GITHUB_ENV
+            
+            ## [DEBUG] Show GitHub Actions Environment File
+            # echo -e "GITHUB_ENV:"
+            # echo $GITHUB_ENV
+            # cat $GITHUB_ENV
+
+            ## [DEBUG] Show GitHub Actions Output File
+            # echo -e "GITHUB_OUTPUT:"
+            # echo $GITHUB_OUTPUT
+            # cat $GITHUB_OUTPUT
+
+            # Remove files when done
+            rm ./token.json
+            rm ./login.json
+            rm ./login-token.json
+        env:
+            VAULT_ADDR: ${{ vars.VAULT_URL }}
+            VAULT_AUTH_JWT_GITHUB_PATH: ${{ vars.VAULT_AUTH_PATH }}
+            VAULT_AUTH_JWT_GITHUB_ROLE: ${{ vars.VAULT_ROLE }}
+            VAULT_NAMESPACE: ${{ vars.VAULT_NAMESPACE }}
+
+#### [STEP] Retrieve Azure Secrets Service Principal `client_id` and `client_secret`
+      - name: Retrieve Azure Service Principal Secrets
+        id: retrieve_azure_secrets
+        env:
+            VAULT_ADDR: ${{ vars.VAULT_URL }}
+            VAULT_AUTH_JWT_GITHUB_PATH: ${{ vars.VAULT_AUTH_PATH }}
+            VAULT_AUTH_JWT_GITHUB_ROLE: ${{ vars.VAULT_ROLE }}
+            VAULT_NAMESPACE: ${{ vars.VAULT_NAMESPACE }}
+            VAULT_AZURE_SECRET_PATH: ${{ vars.SECRET_PATH_AZURE }}
+            VAULT_TOKEN: ${{ steps.log_in_to_vault.outputs.VAULT_TOKEN }}
+            VAULT_TOKEN_ACCESSOR: ${{ steps.log_in_to_vault.outputs.VAULT_TOKEN_ACCESSOR }}
+        run: |
+          # Get Azure Service Principal Secrets
+          curl -sSLf \
+            -H "X-Vault-Token: $VAULT_TOKEN" \
+            -H "X-Vault-Namespace: $VAULT_NAMESPACE" \
+            $VAULT_ADDR/v1/$VAULT_AZURE_SECRET_PATH | jq > azure_secrets.json
+          ## [DEBUG] Show Azure Secrets JSON
+          # cat azure_secrets.json | jq
+          # Process Azure Secrets
+          AZURE_CLIENT_ID=$(cat azure_secrets.json | jq -r '.data.client_id')
+          echo -e "client-id: $AZURE_CLIENT_ID"
+          AZURE_CLIENT_SECRET=$(cat azure_secrets.json | jq -r '.data.client_secret')
+          echo -e "client-secret: $AZURE_CLIENT_SECRET"
+          # Remove files when done
+          rm ./azure_secrets.json
+          echo "AZURE_CLIENT_ID=$AZURE_CLIENT_ID" >> $GITHUB_OUTPUT
+          echo "AZURE_CLIENT_SECRET=$AZURE_CLIENT_SECRET" >> $GITHUB_OUTPUT
+          echo "AZURE_CLIENT_ID=$AZURE_CLIENT_ID" >> $GITHUB_ENV
+          echo "AZURE_CLIENT_SECRET=$AZURE_CLIENT_SECRET" >> $GITHUB_ENV
+
+#### [STEP] 
+      # - name:
+      #   id: 
+
+
+
+
+
+
+
+
+
+
+
+
+
+#### [STEP] 
+      # - name:
+      #   id: 
+
+
+
+
+
+
+
