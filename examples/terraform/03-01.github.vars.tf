@@ -70,7 +70,7 @@ resource "github_actions_secret" "action_azure_subscription" {
 
 resource "github_actions_secret" "action_azure_tenant" {
   repository        = data.github_repository.github_actions.name
-  secret_name       = "AZURE_SUBSCRIPTION"
+  secret_name       = "AZURE_TENANT"
   plaintext_value   = var.azure_tenant_id
 }
 
